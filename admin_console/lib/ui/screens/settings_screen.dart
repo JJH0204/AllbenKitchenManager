@@ -1,62 +1,36 @@
+/**
+ * 작성의도: 서버 네트워크 정보 및 보안 설정을 관리하는 화면 위젯입니다.
+ * 기능 원리: 로컬 및 가상 네트워크(Tailscale) IP 확인, 서버 포트 변경, 방화벽 설정 접근 및 연결된 기기 상세 정보를 제공합니다.
+ */
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:process_run/shell.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'models/device_info.dart';
+import 'package:provider/provider.dart';
+import '../../providers/server_provider.dart';
+import '../../models/device_model.dart';
 
-class SettingsPage extends StatefulWidget {
-  final bool isServerOn;
-  final List<String> logs;
-  final List<DeviceInfo> connectedDevices;
-  final Function(bool start, int port) onToggleServer;
-
-  const SettingsPage({
-    super.key,
-    required this.isServerOn,
-    required this.logs,
-    required this.connectedDevices,
-    required this.onToggleServer,
-  });
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsScreenState extends State<SettingsScreen> {
   String localIp = "Loading...";
   String tailscaleIp = "Not Found";
   bool isTailscaleOffline = false;
   final TextEditingController _portController = TextEditingController();
-  final ScrollController _logScrollController = ScrollController();
-  List<DeviceInfo> connectedDevices = [];
 
   @override
   void initState() {
     super.initState();
     _loadIps();
     _loadPortSettings();
-  }
-
-  @override
-  void didUpdateWidget(SettingsPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.logs.length != oldWidget.logs.length) {
-      _scrollToBottom();
-    }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_logScrollController.hasClients) {
-        _logScrollController.animateTo(
-          _logScrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
   }
 
   Future<void> _loadIps() async {
@@ -72,12 +46,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
       for (var interface in interfaces) {
         for (var addr in interface.addresses) {
-          // 로컬 IP (보통 192.168.x.x 또는 10.x.x.x)
           if (addr.address.startsWith("192.168.") ||
               addr.address.startsWith("10.")) {
             lIp = addr.address;
           }
-          // Tailscale IP (보통 100.x.x.x)
           if (addr.address.startsWith("100.")) {
             tIp = addr.address;
             foundTailscale = true;
@@ -89,7 +61,6 @@ class _SettingsPageState extends State<SettingsPage> {
         setState(() {
           localIp = lIp;
           tailscaleIp = tIp;
-          // UI에 표시된 IP가 100.x.x.x 인데 실제 인터페이스에 없으면 오프라인으로 간주
           isTailscaleOffline = !foundTailscale;
         });
       }
@@ -121,21 +92,23 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildNetworkSection(),
-          const SizedBox(height: 32),
-          _buildPortSection(),
-          const SizedBox(height: 32),
-          _buildFirewallSection(),
-          const SizedBox(height: 32),
-          _buildLogViewerSection(),
-          const SizedBox(height: 32),
-          _buildDeviceTableSection(),
-        ],
-      ),
+    return Consumer<ServerProvider>(
+      builder: (context, serverProvider, child) {
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildNetworkSection(),
+              const SizedBox(height: 32),
+              _buildPortSection(serverProvider),
+              const SizedBox(height: 32),
+              _buildFirewallSection(),
+              const SizedBox(height: 32),
+              _buildDeviceTableSection(serverProvider.connectedClients),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -190,7 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildPortSection() {
+  Widget _buildPortSection(ServerProvider serverProvider) {
     return _buildCard(
       title: "Server Configuration",
       child: Column(
@@ -206,46 +179,21 @@ class _SettingsPageState extends State<SettingsPage> {
                     border: OutlineInputBorder(),
                   ),
                   keyboardType: TextInputType.number,
-                  enabled: !widget.isServerOn,
+                  enabled: !serverProvider.isServerOn,
                 ),
               ),
               const SizedBox(width: 16),
               ElevatedButton(
-                onPressed: widget.isServerOn ? null : _savePortSettings,
+                onPressed: serverProvider.isServerOn ? null : _savePortSettings,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 24,
                     vertical: 20,
                   ),
                 ),
-                child: const Text("설정 저장"),
+                child: const Text("포트 저장"),
               ),
             ],
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton(
-              onPressed: () {
-                final port = int.tryParse(_portController.text) ?? 8080;
-                widget.onToggleServer(!widget.isServerOn, port);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: widget.isServerOn ? Colors.red : Colors.green,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                widget.isServerOn ? "SERVER STOP" : "SERVER START",
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -254,7 +202,6 @@ class _SettingsPageState extends State<SettingsPage> {
               onPressed: () async {
                 final appDir = await getApplicationSupportDirectory();
                 final dataPath = p.join(appDir.path, 'data');
-                // 윈도우 탐색기로 해당 폴더 열기
                 var shell = Shell();
                 await shell.run('explorer "${dataPath.replaceAll('/', '\\')}"');
               },
@@ -269,36 +216,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildLogViewerSection() {
-    return _buildCard(
-      title: "Server Logs",
-      padding: EdgeInsets.zero,
-      child: Container(
-        height: 200,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: const Color(0xFF0D1117),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: ListView.builder(
-          controller: _logScrollController,
-          itemCount: widget.logs.length,
-          itemBuilder: (context, index) {
-            return Text(
-              widget.logs[index],
-              style: const TextStyle(
-                color: Color(0xFF3FB950), // Terminal Green
-                fontFamily: 'Courier', // Monospace font
-                fontSize: 13,
-              ),
-            );
-          },
-        ),
       ),
     );
   }
@@ -325,7 +242,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildDeviceTableSection() {
+  Widget _buildDeviceTableSection(List<DeviceModel> connectedDevices) {
     return _buildCard(
       title: "Connected Clients",
       padding: EdgeInsets.zero,
@@ -340,7 +257,7 @@ class _SettingsPageState extends State<SettingsPage> {
               DataColumn(label: Text("Status")),
               DataColumn(label: Text("Last Seen")),
             ],
-            rows: widget.connectedDevices.map((device) {
+            rows: connectedDevices.map((device) {
               return DataRow(
                 cells: [
                   DataCell(Text(device.id)),
