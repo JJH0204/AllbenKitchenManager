@@ -16,6 +16,7 @@ import '../models/order_model.dart';
 
 class ServerService {
   HttpServer? _server;
+  Process? _snifferProcess;
   final Set<WebSocketChannel> _wsChannels = {};
 
   // 콜백 함수들
@@ -35,7 +36,7 @@ class ServerService {
       defaultDocument: 'index.html',
     );
 
-    Response apiHandler(Request request) {
+    FutureOr<Response> apiHandler(Request request) async {
       if (request.url.path == 'api/kitchen_data') {
         final connInfo =
             request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
@@ -74,6 +75,9 @@ class ServerService {
             'Access-Control-Allow-Origin': '*',
           },
         );
+      }
+      if (request.url.path == 'api/external_order') {
+        return _handleSniffedData(request);
       }
       return Response.notFound('Not Found');
     }
@@ -189,10 +193,96 @@ class ServerService {
         );
 
     _server = await shelf_io.serve(handler, '0.0.0.0', port);
+
+    // MySQL 스니퍼 자동 실행
+    _startSniffer();
+
     return _server!;
   }
 
+  Future<Response> _handleSniffedData(Request request) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body);
+      onLog?.call("[스니퍼 데이터 수신] ${data['type']}");
+
+      // 여기서 추가적인 주문 처리 로직(DB 저장 등)을 수행할 수 있습니다.
+      // 현재는 로그 출력으로 검증
+
+      return Response.ok(
+        jsonEncode({"status": "success"}),
+        headers: {'content-type': 'application/json'},
+      );
+    } catch (e) {
+      onLog?.call("스니퍼 데이터 처리 에러: $e");
+      return Response.internalServerError();
+    }
+  }
+
+  Future<void> _startSniffer() async {
+    try {
+      final adapterGuid = await _findLoopbackAdapter();
+      final pythonPath = Platform.isWindows
+          ? '..\\python_packetSnip\\venv\\Scripts\\python.exe'
+          : 'python3';
+      final scriptPath = '..\\python_packetSnip\\main.py';
+
+      onLog?.call("MySQL 스니퍼 실행 시도: $adapterGuid");
+
+      _snifferProcess = await Process.start(pythonPath, [
+        scriptPath,
+        adapterGuid,
+      ], runInShell: true);
+
+      _snifferProcess!.stdout.transform(utf8.decoder).listen((data) {
+        onLog?.call("[Sniffer STDOUT] ${data.trim()}");
+      });
+
+      _snifferProcess!.stderr.transform(utf8.decoder).listen((data) {
+        onLog?.call("[Sniffer STDERR] ${data.trim()}");
+      });
+
+      _snifferProcess!.exitCode.then((code) {
+        onLog?.call("MySQL 스니퍼 프로세스 종료 (Exit Code: $code)");
+        _snifferProcess = null;
+      });
+    } catch (e) {
+      onLog?.call("MySQL 스니퍼 실행 실패: $e");
+    }
+  }
+
+  Future<String> _findLoopbackAdapter() async {
+    try {
+      // Dart에서 직접 tshark를 호출하여 어댑터 목록을 가져올 수도 있지만,
+      // 여기서는 Python venv를 활용해 GUID를 신속하게 확인하는 작은 헬퍼를 실행합니다.
+      final pythonPath = Platform.isWindows
+          ? '..\\python_packetSnip\\venv\\Scripts\\python.exe'
+          : 'python3';
+
+      final result = await Process.run(pythonPath, [
+        '-c',
+        'import pyshark; print(pyshark.tshark.tshark.get_tshark_interfaces())',
+      ]);
+
+      if (result.exitCode == 0) {
+        final output = result.stdout.toString();
+        // 간단한 파싱: NPF_Loopback 우선, 없으면 첫 번째 리턴
+        if (output.contains('NPF_Loopback')) return r'\Device\NPF_Loopback';
+
+        final match = RegExp(
+          r"(\\Device\\NPF_{[A-F0-9-]+})",
+        ).firstMatch(output);
+        if (match != null) return match.group(1)!;
+      }
+    } catch (e) {
+      onLog?.call("어댑터 검색 에러: $e");
+    }
+    return r'\Device\NPF_Loopback'; // Default fallback
+  }
+
   Future<void> stopServer() async {
+    _snifferProcess?.kill();
+    _snifferProcess = null;
     await _server?.close(force: true);
     _server = null;
     _wsChannels.clear();
