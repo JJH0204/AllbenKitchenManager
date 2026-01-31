@@ -11,6 +11,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_static/shelf_static.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:path/path.dart' as p;
 import '../models/menu_model.dart';
 import '../models/order_model.dart';
 
@@ -18,6 +19,65 @@ class ServerService {
   HttpServer? _server;
   Process? _snifferProcess;
   final Set<WebSocketChannel> _wsChannels = {};
+
+  // 실행 파일 기준 경로 계산
+  String get _executableDir => p.dirname(Platform.resolvedExecutable);
+
+  String get _pythonPath {
+    if (Platform.isWindows) {
+      // Platform.resolvedExecutable (Release exe) 기준 python_assets/python/python.exe 사용
+      final embedPath = p.join(
+        _executableDir,
+        'python_assets',
+        'python',
+        'python.exe',
+      );
+      if (File(embedPath).existsSync()) return p.normalize(embedPath);
+
+      // 개발 환경에서의 Fallback (프로젝트 루트의 python_runtime 폴더)
+      for (int i = 3; i <= 7; i++) {
+        final segments = List.filled(i, '..');
+        final devPath = p.normalize(
+          p.joinAll([
+            _executableDir,
+            ...segments,
+            'python_runtime',
+            'python.exe',
+          ]),
+        );
+        if (File(devPath).existsSync()) return devPath;
+      }
+
+      // 기본값
+      return 'python_runtime\\python.exe';
+    }
+    return 'python3';
+  }
+
+  String get _scriptPath {
+    if (Platform.isWindows) {
+      // 1. 배포 환경 (python_assets/main.py)
+      final deployPath = p.join(_executableDir, 'python_assets', 'main.py');
+      if (File(deployPath).existsSync()) return deployPath;
+
+      // 2. 개발 환경 (python_packetSnip/main.py)
+      for (int i = 3; i <= 7; i++) {
+        final segments = List.filled(i, '..');
+        final devPath = p.normalize(
+          p.joinAll([
+            _executableDir,
+            ...segments,
+            'python_packetSnip',
+            'main.py',
+          ]),
+        );
+        if (File(devPath).existsSync()) return devPath;
+      }
+
+      return 'python_packetSnip\\main.py';
+    }
+    return 'main.py';
+  }
 
   // 콜백 함수들
   void Function(String ip, bool isConnected)? onClientStatusChanged;
@@ -222,32 +282,46 @@ class ServerService {
   Future<void> _startSniffer() async {
     try {
       final adapterGuid = await _findLoopbackAdapter();
-      final pythonPath = Platform.isWindows
-          ? '..\\python_packetSnip\\venv\\Scripts\\python.exe'
-          : 'python3';
-      final scriptPath = '..\\python_packetSnip\\main.py';
+      final pythonPath = _pythonPath;
+      final scriptPath = _scriptPath;
 
-      onLog?.call("MySQL 스니퍼 실행 시도: $adapterGuid");
+      // 1. 실행 파일 존재 여부 선제적 확인
+      if (!await File(pythonPath).exists()) {
+        throw "파이썬 엔진을 찾을 수 없습니다: $pythonPath";
+      }
 
-      _snifferProcess = await Process.start(pythonPath, [
-        scriptPath,
-        adapterGuid,
-      ], runInShell: true);
+      onLog?.call("MySQL 스니퍼 실행 시도...");
 
-      _snifferProcess!.stdout.transform(utf8.decoder).listen((data) {
-        onLog?.call("[Sniffer STDOUT] ${data.trim()}");
-      });
+      // 2. 프로세스 실행 (runInShell: false 권장)
+      _snifferProcess = await Process.start(
+        pythonPath,
+        ['-u', scriptPath, adapterGuid], // -u 옵션 유지
+        runInShell: false, // 쉘을 거치지 않고 직접 실행
+        workingDirectory: _executableDir, // 작업 디렉토리 명시
+      );
 
-      _snifferProcess!.stderr.transform(utf8.decoder).listen((data) {
-        onLog?.call("[Sniffer STDERR] ${data.trim()}");
-      });
+      // 3. LineSplitter를 통한 안정적인 로그 수집
+      _snifferProcess!.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            onLog?.call("[STDOUT] $line");
+          });
 
+      _snifferProcess!.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            onLog?.call("[🚨 STDERR] $line"); // 에러는 반드시 출력
+          });
+
+      // 4. 즉각적인 종료 감지
       _snifferProcess!.exitCode.then((code) {
-        onLog?.call("MySQL 스니퍼 프로세스 종료 (Exit Code: $code)");
+        onLog?.call("프로세스 종료됨 (Exit Code: $code)");
         _snifferProcess = null;
       });
     } catch (e) {
-      onLog?.call("MySQL 스니퍼 실행 실패: $e");
+      onLog?.call("실행 실패 (Catch): $e");
     }
   }
 
@@ -255,9 +329,7 @@ class ServerService {
     try {
       // Dart에서 직접 tshark를 호출하여 어댑터 목록을 가져올 수도 있지만,
       // 여기서는 Python venv를 활용해 GUID를 신속하게 확인하는 작은 헬퍼를 실행합니다.
-      final pythonPath = Platform.isWindows
-          ? '..\\python_packetSnip\\venv\\Scripts\\python.exe'
-          : 'python3';
+      final pythonPath = _pythonPath;
 
       final result = await Process.run(pythonPath, [
         '-c',

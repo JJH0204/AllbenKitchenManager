@@ -1,0 +1,14 @@
+# Dependencies Preparation Instructions
+
+Please place the following files in this folder (`c:\Users\jhjy5\Documents\GitHub\AllbenKitchenManager\dependencies\`) before running the Inno Setup compiler:
+
+1. **vc_redist.x64.exe**
+   - Official Download: [aka.ms/vc14/vc_redist.x64.exe](https://aka.ms/vc14/vc_redist.x64.exe)
+   - Purpose: Essential C++ runtime for Flutter/Windows applications.
+
+2. **Wireshark (TShark)**
+   - Official Download: [wireshark.org/download.html](https://www.wireshark.org/download.html)
+   - Purpose: `pyshark` library requires TShark to parse the MySQL packets captured by Npcap.
+
+After placing these files (if you choose to bundle them) or ensuring they are installed, follow the guide.
+Note: The installer will check for existing installations and provide links if missing.
