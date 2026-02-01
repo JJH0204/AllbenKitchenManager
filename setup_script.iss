@@ -26,7 +26,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Flutter Build Output
 Source: "admin_console\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Dependencies
-; Source: "dependencies\nssm.exe"; DestDir: "{app}\dependencies"; Flags: ignoreversion
 Source: "dependencies\VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
@@ -37,17 +36,6 @@ Name: "{autodesktop}\Allben Kitchen Manager"; Filename: "{app}\AllbenKitchenAdmi
 [Run]
 ; Install VC++ Redistributable
 Filename: "{tmp}\VC_redist.x64.exe"; Parameters: "/quiet /install"; StatusMsg: "{cm:InstallingVC}"; Flags: waituntilterminated
-
-; Service Registration using NSSM
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "install AllbenKitchenServer ""{app}\AllbenKitchenAdmin.exe"""; Flags: runhidden waituntilterminated
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "set AllbenKitchenServer AppDirectory ""{app}"""; Flags: runhidden waituntilterminated
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "set AllbenKitchenServer AppParameters ""--service"""; Flags: runhidden waituntilterminated
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "start AllbenKitchenServer"; Flags: runhidden waituntilterminated
-
-[UninstallRun]
-; Stop and Remove Service
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "stop AllbenKitchenServer"; Flags: runhidden waituntilterminated
-; Filename: "{app}\dependencies\nssm.exe"; Parameters: "remove AllbenKitchenServer confirm"; Flags: runhidden waituntilterminated
 
 [CustomMessages]
 korean.InstallingVC=Visual C++ 재배포 가능 패키지를 설치하는 중...
