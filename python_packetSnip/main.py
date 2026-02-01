@@ -3,13 +3,14 @@ import json
 import threading
 import queue
 import time
+import traceback
 from datetime import datetime
 
 try:
     import pyshark
     import requests
 except ImportError:
-    print("Error: 필수 패키지(pyshark, requests)가 설치되어 있지 않습니다.")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [ERROR] 필수 패키지(pyshark, requests)가 설치되어 있지 않습니다.")
     print("설치 방법: pip install pyshark requests")
     sys.exit(1)
 
@@ -17,131 +18,153 @@ except ImportError:
 SERVER_URL = "http://localhost:8080/api/external_order"
 MYSQL_PORT = 3306
 
+# State Management: Prepared Statement ID 추적
+# PREPARE 단계에서 쿼리문을 저장하고, EXECUTE 단계에서 ID로 대조하기 위함
+prepared_statements = {}
+
 # 비동기 전송을 위한 큐 설정
 data_queue = queue.Queue()
+
+def log(level, message):
+    """표준화된 로그 출력 함수"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] [{level}] {message}")
+    sys.stdout.flush()
 
 def find_loopback_adapter():
     """NPF_Loopback 어댑터를 자동으로 찾습니다."""
     try:
-        # tshark 인터페이스 목록 가져오기
         interfaces = pyshark.tshark.tshark.get_tshark_interfaces()
-        # 1. NPF_Loopback 명시적 검색
         for line in interfaces:
             if r"\Device\NPF_Loopback" in line:
                 return r"\Device\NPF_Loopback"
-        # 2. 'loopback' 키워드 검색
         for line in interfaces:
             if "loopback" in line.lower():
                 parts = line.split()
                 if len(parts) >= 2:
                     return parts[1]
     except Exception as e:
-        print(f"[*] Adapter search failed: {e}")
-    
-    # 기본값 반환
+        log("ERROR", f"Adapter search failed: {e}\n{traceback.format_exc()}")
     return r'\Device\NPF_Loopback'
 
 def send_worker():
     """큐에서 데이터를 가져와 서버로 전송하는 워커 스레드"""
-    print("[*] Send worker thread started.")
+    log("INFO", "Send worker thread started.")
     while True:
         try:
             data = data_queue.get()
-            if data is None: # 종료 신호
-                break
+            if data is None: break
             
             try:
-                # 타임아웃을 짧게(0.5초) 설정하여 전송 지연이 큐에 쌓이는 것을 방지
                 response = requests.post(SERVER_URL, json=data, timeout=0.5)
                 if response.status_code == 200:
-                    print(f"[OK] Data sent: {data.get('type')}")
+                    log("INFO", f"Data sent: {data.get('type')} (Seat: {data.get('seat_no')})")
                 else:
-                    print(f"[ERR] Server returned {response.status_code}")
+                    log("ERROR", f"Server error {response.status_code}")
             except requests.exceptions.RequestException as e:
-                print(f"[ERR] Network error: {e}")
+                log("ERROR", f"Network error: {e}")
             
             data_queue.task_done()
-            sys.stdout.flush()
         except Exception as e:
-            print(f"[ERR] Worker error: {e}")
+            log("ERROR", f"Worker error: {e}")
 
 def process_mysql_packet(packet):
-    """패킷에서 필요한 데이터만 추출하여 큐에 삽입"""
+    """
+    [MySQL Protocol 기술 검증]
+    1. COM_STMT_PREPARE (22): 서버에 쿼리 템플릿을 등록하고 Statement ID를 발급받는 단계.
+    2. COM_STMT_EXECUTE (23): 발급받은 ID와 바이너리로 바인딩된 파라미터들을 전송하는 단계.
+    3. Binary Protocol Value: 파라미터는 Null Bitmap 이후 정해진 순서(Index)대로 데이터가 위치함.
+    4. TCP Reassembly: 대용량 주문(분할 패킷) 처리를 위해 tcp.desegment_tcp_streams 활성화 필수.
+    """
     try:
-        # pyshark 최적화(use_json=True) 시 필드 접근 방식
-        if hasattr(packet, 'mysql'):
-            mysql_layer = packet.mysql
+        if not hasattr(packet, 'mysql'):
+            return
+
+        mysql_layer = packet.mysql
+        command = getattr(mysql_layer, 'command', None)
+
+        # 1. Statement Prepare 캐싱 (Query 문맥 확보)
+        if command == '22' and hasattr(mysql_layer, 'query'):
+            query = mysql_layer.query.lower()
+            stmt_id = getattr(mysql_layer, 'stmt_id', None)
+            if stmt_id and ('tb_order' in query or 'tb_suborder' in query):
+                prepared_statements[stmt_id] = query
+                log("DEBUG", f"Statement Cached: ID={stmt_id} | Query={query[:50]}...")
+
+        # 2. Statement Execute 분석 (실제 데이터 추출)
+        elif command == '23':
+            stmt_id = getattr(mysql_layer, 'stmt_id', None)
+            context = prepared_statements.get(stmt_id, "Unknown Context")
             
-            # COM_STMT_EXECUTE (23) 또는 일반 Query (3) 등 필요한 명령 확인
-            command = getattr(mysql_layer, 'command', None)
-            
-            if command == '23': # COM_STMT_EXECUTE
-                # 필요한 필드만 즉시 추출 (무거운 전체 필드 리스트화 지양)
-                values = [f.get_default_value() for f in mysql_layer.value.all_fields] if hasattr(mysql_layer, 'value') else []
-                
-                # 데이터 유무에 따른 분류
-                if len(values) >= 17:
+            log("DEBUG", f"Command 23 Detected (ID: {stmt_id} | Context: {context})")
+
+            try:
+                # 바이너리 파라미터 추출 (Pyshark의 .all_fields 활용)
+                params = []
+                if hasattr(mysql_layer, 'value'):
+                    params = [f.get_default_value() for f in mysql_layer.value.all_fields]
+                elif hasattr(mysql_layer, 'string'):
+                    params = [f.get_default_value() for f in mysql_layer.string.all_fields]
+
+                # 기획 인덱스 적용: Index 9 (좌석), Index 7 (총액)
+                if len(params) > 9:
                     order_data = {
-                        "type": "tb_order",
-                        "seat_no": values[9],
-                        "total_price": values[7],
-                        "order_time": values[16],
+                        "type": "tb_order" if 'tb_order' in context else "tb_suborder",
+                        "seat_no": params[9],
+                        "total_price": params[7],
+                        "stmt_id": stmt_id,
                         "timestamp": datetime.now().isoformat()
                     }
                     data_queue.put(order_data)
-                
-                elif len(values) > 0:
-                    suborder_data = {
-                        "type": "tb_suborder",
-                        "items": values,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    data_queue.put(suborder_data)
+                    log("INFO", f"Order Detected: Seat {params[9]}, Price {params[7]}")
+                else:
+                    # 파라미터가 부족하더라도 감지 로그는 남김 (디버깅 용도)
+                    if stmt_id in prepared_statements:
+                        log("DEBUG", f"Execute found but params length {len(params)} insufficient for Index 9")
 
-    except Exception:
-        # 패킷 분석 중 오류는 무시하고 흐름 유지
-        pass
+            except (AttributeError, IndexError) as e:
+                log("DEBUG", f"Binary field skip (Incomplete Packet): {e}")
+
+    except Exception as e:
+        log("ERROR", f"Packet analysis error: {e}")
 
 def start_sniffing(interface):
-    """패킷 캡처 시작 및 메인 루프"""
-    print(f"[*] MySQL Sniffer Started on {interface}")
-    sys.stdout.flush()
+    log("INFO", f"MySQL Sniffer Engine v2.0 Started on {interface}")
     
-    # 전송 워커 스레드 시작
     worker_thread = threading.Thread(target=send_worker, daemon=True)
     worker_thread.start()
     
     capture = None
     try:
-        # 성능 최적화를 위한 LiveCapture 설정
+        # [고도화 캡처 설정] - TCP 재조합 및 바이너리 분석 최적화
         capture = pyshark.LiveCapture(
             interface=interface,
-            display_filter=f'tcp.port == {MYSQL_PORT} && mysql.command == 23',
-            use_json=True,      # JSON 엔진 사용으로 파싱 속도 향상
-            include_raw=False,  # Raw 데이터 제외로 메모리 절약
-            decode_as={f'tcp.port=={MYSQL_PORT}': 'mysql'} # 3306 포트를 mysql로 강제 지정
+            display_filter=f'tcp.port == {MYSQL_PORT} && (mysql.command == 22 || mysql.command == 23)',
+            use_json=True,
+            include_raw=False,
+            decode_as={f'tcp.port=={MYSQL_PORT}': 'mysql'},
+            override_prefs={
+                'tcp.desegment_tcp_streams': 'TRUE',
+                'mysql.desegment_buffers': 'TRUE'
+            }
         )
         
         for packet in capture.sniff_continuously():
             process_mysql_packet(packet)
             
     except KeyboardInterrupt:
-        print("\n[*] Stopping sniffer...")
+        log("INFO", "Sniffer stopping...")
     except Exception as e:
-        print(f"[CRITICAL] Capture error: {e}")
+        log("ERROR", f"Capture Engine Error: {e}\n{traceback.format_exc()}")
     finally:
         if capture:
             capture.close()
-        # 워커 종료 신호
         data_queue.put(None)
-        print("[*] Cleanup finished.")
-        sys.stdout.flush()
+        log("INFO", "Sniffer Engine Offline.")
 
 if __name__ == "__main__":
-    # 인터페이스 결정
-    if len(sys.argv) > 1:
-        target_interface = sys.argv[1]
-    else:
-        target_interface = find_loopback_adapter()
-    
-    start_sniffing(target_interface)
+    try:
+        target_interface = sys.argv[1] if len(sys.argv) > 1 else find_loopback_adapter()
+        start_sniffing(target_interface)
+    except Exception as e:
+        log("ERROR", f"Critical Startup Failure: {e}")

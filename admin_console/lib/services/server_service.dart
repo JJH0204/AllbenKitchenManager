@@ -106,7 +106,7 @@ class ServerService {
           onClientStatusChanged?.call(clientIp, true);
         }
 
-        onLog?.call("[API 호출] /api/kitchen_data ($clientIp)");
+        _log("INFO", "/api/kitchen_data 호출 수신 ($clientIp)");
 
         final host = request.headers['host'] ?? "localhost:$port";
         final baseUrl = "http://$host/images";
@@ -155,11 +155,11 @@ class ServerService {
 
       final ackJson = jsonEncode(ack);
       channel.sink.add(ackJson);
-      onLog?.call("[WS 발송] $ip에게 CONNECTION_ACK 송신 완료");
+      _log("DEBUG", "$ip에게 CONNECTION_ACK 송신 완료");
 
       _wsChannels.add(channel);
       onClientStatusChanged?.call(ip, true);
-      onLog?.call("신규 웹소켓 연결 성공: $ip (총: ${_wsChannels.length})");
+      _log("INFO", "신규 웹소켓 연결 성공: $ip (총: ${_wsChannels.length})");
 
       channel.stream.listen(
         (message) {
@@ -173,7 +173,7 @@ class ServerService {
                 data['type'] == 'DELETE_ORDER') {
               final String orderId =
                   data['orderId'] ?? data['data'] ?? data['payload'];
-              onLog?.call("[WS 요청] 주문 삭제 요청 수신: $orderId");
+              _log("INFO", "주문 삭제 요청 수신: $orderId (From: $ip)");
               onDeleteOrderRequested?.call(orderId);
 
               broadcast(
@@ -189,7 +189,7 @@ class ServerService {
               channel.sink.add(jsonEncode(response));
             }
           } catch (e) {
-            onLog?.call("WS 메시지 처리 에러 ($ip): $e");
+            _log("ERROR", "WS 메시지 처리 에러 ($ip): $e");
           }
         },
         onDone: () {
@@ -198,13 +198,14 @@ class ServerService {
           final String reason = (channel.closeCode != null)
               ? "정상 종료 (Code: ${channel.closeCode})"
               : "비정상 종료 (Timeout/Network)";
-          onLog?.call(
+          _log(
+            "INFO",
             "웹소켓 해제: $ip | 사유: $reason | 잔여 기기: ${_wsChannels.length}",
           );
         },
         onError: (e) {
           _wsChannels.remove(channel);
-          onLog?.call("웹소켓 통신 에러 ($ip): $e | 연결이 강제 종료됨");
+          _log("ERROR", "웹소켓 통신 에러 ($ip): $e");
         },
       );
     }
@@ -221,8 +222,9 @@ class ServerService {
               onClientStatusChanged?.call(clientIp, true);
             }
 
-            onLog?.call(
-              "접속 요청 수신: $clientIp | ${request.method} | ${request.url.path}",
+            _log(
+              "DEBUG",
+              "Request: ${request.method} ${request.url.path} (From: $clientIp)",
             );
             return await innerHandler(request);
           };
@@ -263,20 +265,26 @@ class ServerService {
   Future<Response> _handleSniffedData(Request request) async {
     try {
       final body = await request.readAsString();
-      final data = jsonDecode(body);
-      onLog?.call("[스니퍼 데이터 수신] ${data['type']}");
+      // 수신된 Raw Body 전체를 [DEBUG] 레벨로 로깅하여 데이터 형식 검증
+      onLog?.call("[DEBUG] Raw Sniffer Body Received: $body");
 
-      // 여기서 추가적인 주문 처리 로직(DB 저장 등)을 수행할 수 있습니다.
-      // 현재는 로그 출력으로 검증
+      final data = jsonDecode(body);
+      onLog?.call("[INFO] Parsed Sniffer Data Type: ${data['type']}");
 
       return Response.ok(
         jsonEncode({"status": "success"}),
         headers: {'content-type': 'application/json'},
       );
-    } catch (e) {
-      onLog?.call("스니퍼 데이터 처리 에러: $e");
+    } catch (e, stack) {
+      onLog?.call("[ERROR] 스ни퍼 데이터 처리 에러: $e\nStackTrace: $stack");
       return Response.internalServerError();
     }
+  }
+
+  // 내부 로그 헬퍼 추가
+  void _log(String level, String message) {
+    final timestamp = DateTime.now().toString().substring(0, 19);
+    onLog?.call("[$timestamp] [$level] $message");
   }
 
   Future<void> _startSniffer() async {
@@ -290,7 +298,7 @@ class ServerService {
         throw "파이썬 엔진을 찾을 수 없습니다: $pythonPath";
       }
 
-      onLog?.call("MySQL 스니퍼 실행 시도...");
+      _log("INFO", "MySQL 스니퍼 실행 시도...");
 
       // 2. 프로세스 실행 (runInShell: false 권장)
       _snifferProcess = await Process.start(
@@ -305,23 +313,22 @@ class ServerService {
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
-            onLog?.call("[STDOUT] $line");
+            _log("STDOUT", line); // 이미 스니퍼에서 형식이 지정되어 있으므로 직접 출력
           });
 
       _snifferProcess!.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
-            onLog?.call("[🚨 STDERR] $line"); // 에러는 반드시 출력
+            _log("STDERR", line); // 스니퍼의 에러 로그 직접 출력
           });
 
       // 4. 즉각적인 종료 감지
       _snifferProcess!.exitCode.then((code) {
-        onLog?.call("프로세스 종료됨 (Exit Code: $code)");
-        _snifferProcess = null;
+        _log("INFO", "스니퍼 프로세스 종료됨 (Exit Code: $code)");
       });
     } catch (e) {
-      onLog?.call("실행 실패 (Catch): $e");
+      _log("ERROR", "스니퍼 실행 실패: $e");
     }
   }
 
@@ -347,17 +354,80 @@ class ServerService {
         if (match != null) return match.group(1)!;
       }
     } catch (e) {
-      onLog?.call("어댑터 검색 에러: $e");
+      _log("ERROR", "어댑터 검색 에러: $e");
     }
     return r'\Device\NPF_Loopback'; // Default fallback
   }
 
   Future<void> stopServer() async {
-    _snifferProcess?.kill();
-    _snifferProcess = null;
-    await _server?.close(force: true);
-    _server = null;
-    _wsChannels.clear();
+    onLog?.call("서버 종료 시퀀스 시작...");
+    try {
+      await stopSniffer();
+      await _server?.close(force: true);
+      _server = null;
+      _wsChannels.clear();
+      onLog?.call("서버 및 모든 연결이 성공적으로 종료되었습니다.");
+    } catch (e) {
+      onLog?.call("서버 종료 중 예외 발생: $e");
+    }
+  }
+
+  Future<void> stopSniffer() async {
+    if (_snifferProcess == null) return;
+    final pid = _snifferProcess?.pid;
+    onLog?.call("스니퍼 프로세스 종료 시도 (PID: $pid)...");
+
+    try {
+      // 1. taskkill을 사용하여 트리 전체(/T)를 강제 종료(/F)
+      if (Platform.isWindows && pid != null) {
+        final result = await Process.run('taskkill', [
+          '/PID',
+          '$pid',
+          '/T',
+          '/F',
+        ]);
+        onLog?.call("taskkill 실행 완료: ${result.stdout.toString().trim()}");
+      } else {
+        _snifferProcess?.kill();
+      }
+    } catch (e) {
+      onLog?.call("프로세스 종료 중 에러: $e");
+      // 예외가 발생하더라도 강제로 객체를 비워줌
+      _snifferProcess?.kill();
+    } finally {
+      _snifferProcess = null;
+      // 2. 리소스 잔류 확인 (지연 후 실행)
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _checkResidualProcesses();
+      });
+    }
+  }
+
+  Future<void> _checkResidualProcesses() async {
+    if (!Platform.isWindows) return;
+    try {
+      final result = await Process.run('tasklist', [
+        '/FI',
+        'IMAGENAME eq tshark.exe',
+      ]);
+      final output = result.stdout.toString();
+      if (output.contains('tshark.exe')) {
+        onLog?.call("[주의] tshark.exe가 아직 종료되지 않고 잔류 중입니다.");
+      } else {
+        onLog?.call("[검증] 모든 하위 프로세스(tshark.exe)가 정상 소멸되었습니다.");
+      }
+
+      final pyResult = await Process.run('tasklist', [
+        '/FI',
+        'IMAGENAME eq python.exe',
+      ]);
+      final pyOutput = pyResult.stdout.toString();
+      if (pyOutput.contains('python.exe')) {
+        _log("WARNING", "python.exe가 아직 종료되지 않았습니다.");
+      }
+    } catch (e) {
+      _log("ERROR", "리소스 모니터링 중 에러: $e");
+    }
   }
 
   void broadcast(String message) {
