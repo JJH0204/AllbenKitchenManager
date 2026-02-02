@@ -1,0 +1,1 @@
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" innoSetup\scapy_sniffer_setup.iss
