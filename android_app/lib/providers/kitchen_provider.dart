@@ -15,15 +15,19 @@ import '../utils/hangul_utils.dart';
 ///          각종 Service(API, Storage, WS)와 상호작용하여 데이터를 가져오고,
 ///          상태 변화 발생 시 UI에 알림(`notifyListeners`)을 보내 화면을 갱신합니다.
 
+enum DisplayMode { menus, orders, settings }
+
 class KitchenProvider extends ChangeNotifier {
   final ApiService _apiService = ApiService();
   final StorageService _storageService = StorageService();
   final WebSocketService _wsService = WebSocketService();
   Completer<bool>? _syncCompleter;
   Completer<bool>? _ackCompleter; // Handshake completer
+  Timer? _cookingTimer;
 
   // Data State
   List<MenuInfo> _allMenus = [];
+  final Map<String, MenuInfo> _menuMap = {}; // ID to MenuInfo cache
   List<OrderInfo> _orders = [];
   List<String> _categories = [];
   bool _isLoading = true;
@@ -36,8 +40,9 @@ class KitchenProvider extends ChangeNotifier {
   String _searchTerm = "";
   String _filterMode = "CATEGORY"; // "CATEGORY" or "ORDER"
   List<String> _activeOrderMenus = [];
-  String _activeTableNo = "";
+  String _activeTable = "";
   int _unreadOrdersCount = 0;
+  DisplayMode _displayMode = DisplayMode.orders;
 
   // Server Settings
   String _serverIp = "";
@@ -45,6 +50,7 @@ class KitchenProvider extends ChangeNotifier {
 
   // Getters
   List<MenuInfo> get allMenus => _allMenus;
+  Map<String, MenuInfo> get menuMap => _menuMap;
   List<OrderInfo> get orders => _orders;
   List<String> get categories => _categories;
   bool get isLoading => _isLoading;
@@ -53,12 +59,13 @@ class KitchenProvider extends ChangeNotifier {
   String get searchTerm => _searchTerm;
   String get filterMode => _filterMode;
   List<String> get activeOrderMenus => _activeOrderMenus;
-  String get activeTableNo => _activeTableNo;
+  String get activeTable => _activeTable;
   int get unreadOrdersCount => _unreadOrdersCount;
   String get serverIp => _serverIp;
   String get serverPort => _serverPort;
   String? get wsConnectionStatus => _wsConnectionStatus;
   String? get wsErrorMessage => _wsErrorMessage;
+  DisplayMode get displayMode => _displayMode;
 
   List<MenuInfo> get filteredMenus {
     Iterable<MenuInfo> temp = _allMenus;
@@ -91,10 +98,10 @@ class KitchenProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setOrderFilter(List<String> menus, String tableNo) {
+  void setOrderFilter(List<String> menus, String table) {
     _filterMode = "ORDER";
     _activeOrderMenus = menus;
-    _activeTableNo = tableNo;
+    _activeTable = table;
     notifyListeners();
   }
 
@@ -103,10 +110,49 @@ class KitchenProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setDisplayMode(DisplayMode mode) {
+    _displayMode = mode;
+    notifyListeners();
+  }
+
+  void _startCookingTimer() {
+    _cookingTimer?.cancel();
+    _cookingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      bool changed = false;
+      for (var order in _orders) {
+        for (var item in order.ord) {
+          if (item.status == CookingStatus.cooking &&
+              item.remainingSeconds > 0) {
+            item.remainingSeconds--;
+            if (item.remainingSeconds == 0) {
+              item.status = CookingStatus.done;
+            }
+            changed = true;
+          }
+        }
+      }
+      if (changed) notifyListeners();
+    });
+  }
+
+  void toggleItemStatus(OrderInfo order, OrderItem item) {
+    if (item.status == CookingStatus.done) return;
+
+    if (item.status == CookingStatus.waiting) {
+      item.status = CookingStatus.cooking;
+    } else {
+      item.status = CookingStatus.waiting;
+    }
+    notifyListeners();
+  }
+
   Future<void> initApp() async {
     final settings = await _storageService.loadSettings();
     _serverIp = settings['ip']!;
     _serverPort = settings['port']!;
+
+    // 1. 메뉴 마스터 최우선 로드
+    await _loadMenuMaster();
 
     bool hasLocalData = false;
     final cachedData = await _storageService.loadFromLocal();
@@ -123,7 +169,49 @@ class KitchenProvider extends ChangeNotifier {
     }
 
     _isLoading = false;
+    _startCookingTimer();
     notifyListeners();
+  }
+
+  Future<void> _loadMenuMaster() async {
+    try {
+      final String response = await rootBundle.loadString('json/menus.json');
+      final List<dynamic> data = jsonDecode(response);
+      _parseAndSetMenuData(data);
+      debugPrint("Menu Master loaded: ${_menuMap.length} items.");
+    } catch (e) {
+      debugPrint("Error loading Menu Master: $e");
+    }
+  }
+
+  void _resolveOrder(OrderInfo order) {
+    for (var item in order.ord) {
+      final menu = _menuMap[item.main];
+      if (menu != null) {
+        // Enrichment
+        item.name = menu.name;
+        item.recipe = menu.recipe;
+        item.totalSeconds = menu.cookTime;
+        item.remainingSeconds = menu.cookTime;
+      } else {
+        // Fallback for missing master data
+        item.name = item.main;
+        item.recipe = "레시피 정보가 없습니다.";
+      }
+    }
+  }
+
+  // Helper to create a resolved OrderItem for sub-items (read-only slot representation)
+  OrderItem resolveSubItem(String subId, CookingStatus status) {
+    final menu = _menuMap[subId];
+    return OrderItem(
+      main: subId,
+      name: menu?.name ?? subId,
+      recipe: menu?.recipe ?? "레시피 정보가 없습니다.",
+      status: status,
+      totalSeconds: menu?.cookTime ?? 0,
+      remainingSeconds: menu?.cookTime ?? 0,
+    );
   }
 
   Future<void> connectWebSocket({
@@ -293,6 +381,7 @@ class KitchenProvider extends ChangeNotifier {
             return;
           }
           final newOrder = OrderInfo.fromJson(orderData);
+          _resolveOrder(newOrder);
           _orders.insert(0, newOrder);
           _unreadOrdersCount++;
           SystemSound.play(SystemSoundType.click);
@@ -351,26 +440,38 @@ class KitchenProvider extends ChangeNotifier {
     List<dynamic>? rawOrders;
 
     if (data is List) {
-      rawMenus = data;
-    } else if (data is Map) {
-      if (data.containsKey('menus')) rawMenus = data['menus'];
-      if (data.containsKey('orders')) rawOrders = data['orders'];
+      if (data.isNotEmpty) {
+        final first = data[0];
+        // 주문 데이터인지 메뉴 데이터인지 대각선 검사
+        if (first is Map<String, dynamic>) {
+          if (first.containsKey('ord') || first.containsKey('table')) {
+            rawOrders = data;
+          } else if (first.containsKey('cat') ||
+              first.containsKey('category')) {
+            rawMenus = data;
+          }
+        }
+      }
+    } else if (data is Map<String, dynamic>) {
+      if (data['menus'] is List) rawMenus = data['menus'];
+      if (data['orders'] is List) rawOrders = data['orders'];
     }
 
-    // 2. 메뉴 데이터 갱신 및 카테고리 자동 추출
+    // 2. 메뉴 데이터 갱신 (마스터 맵 빌드 포함)
     if (rawMenus != null) {
-      _allMenus.clear();
-      _allMenus.addAll(rawMenus.map((m) => MenuInfo.fromJson(m)));
-
-      // 메뉴 기반으로 동적 카테고리 생성
-      final extracted = _allMenus.map((m) => m.cat).toSet().toList()..sort();
-      _categories = ["전체", ...extracted];
+      _parseAndSetMenuData(rawMenus);
     }
 
-    // 3. 주문 데이터 갱신 (Full Sync 대응)
+    // 3. 주문 데이터 갱신 및 Enrichment
     if (rawOrders != null) {
       _orders.clear();
-      _orders.addAll(rawOrders.map((o) => OrderInfo.fromJson(o)));
+      for (var o in rawOrders) {
+        if (o is Map<String, dynamic>) {
+          final order = OrderInfo.fromJson(o);
+          _resolveOrder(order);
+          _orders.add(order);
+        }
+      }
     }
 
     // 4. UI 갱신
@@ -390,32 +491,72 @@ class KitchenProvider extends ChangeNotifier {
 
   void _parseAndSetMenuData(List<dynamic> menuList) {
     _allMenus.clear();
+    _menuMap.clear();
 
     final newMenus = menuList.map((m) => MenuInfo.fromJson(m)).toList();
-
     _allMenus.addAll(newMenus);
 
+    for (var m in newMenus) {
+      _menuMap[m.id] = m;
+    }
+
     // 카테고리 동적 추출 및 정렬
-
     final extractedCategories = newMenus.map((m) => m.cat).toSet().toList();
-
     extractedCategories.sort();
 
     _categories.clear();
-
     _categories.add("전체");
-
     _categories.addAll(extractedCategories);
 
     notifyListeners();
   }
 
   Future<void> loadMockData() async {
+    debugPrint("Starting loadMockData...");
+    // 1. 메뉴 마스터 강제 선행 로드 (정합성 보장)
+    await _loadMenuMaster();
+
     final String response = await rootBundle.loadString(
-      'assets/data/mock_data.json',
+      'json/mock_orders.json',
     );
     final data = jsonDecode(response);
     _parseAndSetData(data);
+    debugPrint("loadMockData complete. Total orders: ${_orders.length}");
+  }
+
+  /// 파일명: loadMockDataFromLocal
+  /// 작성의도: json/mock_orders.json 파일에서 대량의 더미 주문 데이터를 로드합니다.
+  /// 기능 원리: rootBundle을 통해 로컬 에셋을 읽어오고, 명시적 타입 캐스팅을 통해 List<OrderInfo>로 변환합니다.
+  Future<void> loadMockDataFromLocal() async {
+    try {
+      final String response = await rootBundle.loadString(
+        'json/mock_orders.json',
+      );
+
+      // 파싱 작업은 Future 기반 비동기로 처리하여 UI 프리징 방지
+      final List<dynamic> decoded = await Future.value(jsonDecode(response));
+
+      // 명시적 타입 캐스팅 적용 (List<dynamic> -> List<OrderInfo>)
+      final List<OrderInfo> mockOrders = decoded
+          .whereType<Map<String, dynamic>>()
+          .map((o) {
+            final order = OrderInfo.fromJson(o);
+            _resolveOrder(order);
+            return order;
+          })
+          .toList();
+
+      _orders.clear();
+      _orders.addAll(mockOrders);
+      _unreadOrdersCount = _orders.length;
+
+      notifyListeners();
+      debugPrint(
+        "Successfully loaded ${_orders.length} mock orders from local.",
+      );
+    } catch (e) {
+      debugPrint("Error loading mock data: $e");
+    }
   }
 
   Future<void> updateSettings(String ip, String port) async {
@@ -424,6 +565,7 @@ class KitchenProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cookingTimer?.cancel();
     _wsService.dispose();
     super.dispose();
   }

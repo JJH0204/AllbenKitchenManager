@@ -93,7 +93,10 @@ class _OrderSidebarState extends State<OrderSidebar> {
                       child: OrderItem(
                         order: order,
                         onTap: () {
-                          provider.setOrderFilter(order.menus, order.tableNo);
+                          provider.setOrderFilter(
+                            order.ord.map((e) => e.main).toList(),
+                            order.table,
+                          );
                           Navigator.pop(context);
                         },
                       ),
@@ -118,7 +121,7 @@ class _OrderSidebarState extends State<OrderSidebar> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("조리 완료 확인"),
-        content: Text("TABLE #${order.tableNo} 주문을 완료 처리할까요?"),
+        content: Text("TABLE #${order.table} 주문을 완료 처리할까요?"),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
