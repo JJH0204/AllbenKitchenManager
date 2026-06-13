@@ -38,21 +38,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context, provider, child) {
         return Container(
           color: const Color(0xFFF8FAFC),
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                "SETTINGS",
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  fontStyle: FontStyle.italic,
-                  color: Color(0xFF0F172A),
-                  letterSpacing: -1,
-                ),
-              ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 0),
               Expanded(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,

@@ -58,6 +58,43 @@ class HomeScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 1. Primary Header Row (Title & Connection Status)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                provider.displayMode == DisplayMode.orders
+                    ? "ORDERS"
+                    : (provider.displayMode == DisplayMode.menus
+                          ? "MANUALS"
+                          : "SETTINGS"),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  fontStyle: FontStyle.italic,
+                  color: Color(0xFF0F172A),
+                  letterSpacing: -1,
+                ),
+              ),
+              Row(
+                children: [
+                  if (provider.displayMode == DisplayMode.menus &&
+                      provider.filterMode == "ORDER")
+                    Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: TextButton(
+                        onPressed: () => provider.setCategory("전체"),
+                        child: const Text("전체 메뉴 보기"),
+                      ),
+                    ),
+                  _buildConnectionChip(provider),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // 2. Search & Categories (Manuals View only)
           if (provider.displayMode == DisplayMode.menus) ...[
             TextField(
               onChanged: (v) => provider.setSearchTerm(v),
@@ -126,65 +163,8 @@ class HomeScreen extends StatelessWidget {
                 },
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16), // Adjusted spacing below filters
           ],
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (provider.displayMode == DisplayMode.orders)
-                    Text(
-                      "ACTIVE ORDERS (${provider.orders.length})",
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        fontStyle: FontStyle.italic,
-                        color: Color(0xFF0F172A),
-                        letterSpacing: -1,
-                      ),
-                    ),
-                  if (provider.displayMode == DisplayMode.orders) ...[
-                    const SizedBox(width: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blue.withOpacity(0.2)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text("🟢", style: TextStyle(fontSize: 10)),
-                          const SizedBox(width: 4),
-                          Text(
-                            "${provider.orders.map((o) => o.table).toSet().length} TABLES ACTIVE",
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              if (provider.displayMode == DisplayMode.menus &&
-                  provider.filterMode == "ORDER")
-                TextButton(
-                  onPressed: () => provider.setCategory("전체"),
-                  child: const Text("전체 메뉴 보기"),
-                ),
-            ],
-          ),
-          const SizedBox(height: 20),
           Expanded(
             child: provider.displayMode == DisplayMode.orders
                 ? _buildOrdersView(provider)
@@ -501,13 +481,59 @@ class HomeScreen extends StatelessWidget {
     return GridView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 6,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.65,
+        crossAxisCount: 8,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 1.5,
       ),
       itemCount: provider.filteredMenus.length,
       itemBuilder: (context, i) => MenuCard(menu: provider.filteredMenus[i]),
+    );
+  }
+
+  Widget _buildConnectionChip(KitchenProvider provider) {
+    final status = provider.wsConnectionStatus;
+    Color color;
+    String label;
+    String dot;
+
+    if (status == "success") {
+      color = Colors.green;
+      label = "CONNECTED";
+      dot = "🟢";
+    } else if (status == "connecting") {
+      color = Colors.orange;
+      label = "CONNECTING";
+      dot = "🟡";
+    } else {
+      color = Colors.red;
+      label = "DISCONNECTED";
+      dot = "🔴";
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(dot, style: const TextStyle(fontSize: 10)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: color,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

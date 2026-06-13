@@ -9,7 +9,8 @@ class OrderItem {
   final String main; // 메뉴 ID
   String name; // 메뉴 실제 이름 (Enriched)
   String recipe; // 메뉴 조리법 (Enriched)
-  final List<String> sub; // 서브메뉴 ID 리스트
+  final List<String> sub; // 서브메뉴 ID 리스트 (원본 데이터 유지)
+  List<OrderItem> subItems; // 확장된 서브메뉴 리스트
   CookingStatus status;
   int remainingSeconds;
   int totalSeconds;
@@ -19,6 +20,7 @@ class OrderItem {
     this.name = "",
     this.recipe = "",
     this.sub = const [],
+    this.subItems = const [],
     this.status = CookingStatus.waiting,
     this.remainingSeconds = 180,
     this.totalSeconds = 180,
@@ -34,9 +36,15 @@ class OrderItem {
         }
       }
 
+      // Convert sub IDs to OrderItem objects
+      final List<OrderItem> subItems = parsedSubs
+          .map((id) => OrderItem(main: id))
+          .toList();
+
       return OrderItem(
         main: (json['main'] ?? "").toString(),
         sub: parsedSubs,
+        subItems: subItems,
         status: _parseStatus(json['status']?.toString()),
         remainingSeconds:
             int.tryParse(json['remainingSeconds']?.toString() ?? "") ??
@@ -66,6 +74,7 @@ class OrderItem {
   Map<String, dynamic> toJson() => {
     'main': main,
     'sub': sub,
+    'subItems': subItems.map((s) => s.toJson()).toList(),
     'status': status.name,
     'remainingSeconds': remainingSeconds,
     'totalSeconds': totalSeconds,

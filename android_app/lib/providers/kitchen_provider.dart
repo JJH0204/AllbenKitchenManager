@@ -121,6 +121,7 @@ class KitchenProvider extends ChangeNotifier {
       bool changed = false;
       for (var order in _orders) {
         for (var item in order.ord) {
+          // Main item timer
           if (item.status == CookingStatus.cooking &&
               item.remainingSeconds > 0) {
             item.remainingSeconds--;
@@ -128,6 +129,17 @@ class KitchenProvider extends ChangeNotifier {
               item.status = CookingStatus.done;
             }
             changed = true;
+          }
+          // Sub items timers
+          for (var subItem in item.subItems) {
+            if (subItem.status == CookingStatus.cooking &&
+                subItem.remainingSeconds > 0) {
+              subItem.remainingSeconds--;
+              if (subItem.remainingSeconds == 0) {
+                subItem.status = CookingStatus.done;
+              }
+              changed = true;
+            }
           }
         }
       }
@@ -186,18 +198,24 @@ class KitchenProvider extends ChangeNotifier {
 
   void _resolveOrder(OrderInfo order) {
     for (var item in order.ord) {
-      final menu = _menuMap[item.main];
-      if (menu != null) {
-        // Enrichment
-        item.name = menu.name;
-        item.recipe = menu.recipe;
-        item.totalSeconds = menu.cookTime;
-        item.remainingSeconds = menu.cookTime;
-      } else {
-        // Fallback for missing master data
-        item.name = item.main;
-        item.recipe = "레시피 정보가 없습니다.";
+      _enrichOrderItem(item);
+      // Recursively enrich sub items
+      for (var subItem in item.subItems) {
+        _enrichOrderItem(subItem);
       }
+    }
+  }
+
+  void _enrichOrderItem(OrderItem item) {
+    final menu = _menuMap[item.main];
+    if (menu != null) {
+      item.name = menu.name;
+      item.recipe = menu.recipe;
+      item.totalSeconds = menu.cookTime;
+      item.remainingSeconds = menu.cookTime;
+    } else {
+      item.name = item.main;
+      item.recipe = "레시피 정보가 없습니다.";
     }
   }
 

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../../models/order_info.dart';
-import '../../providers/kitchen_provider.dart';
 import 'compact_menu_slot.dart';
 
 class TableOrderCard extends StatefulWidget {
@@ -204,8 +202,8 @@ class _TableOrderCardState extends State<TableOrderCard> {
                   spacing: 12,
                   runSpacing: 12,
                   children: widget.order.ord.expand((item) {
-                    final provider = context.read<KitchenProvider>();
                     final List<Widget> slots = [];
+                    // Main Menu Slot
                     slots.add(
                       SizedBox(
                         width: 180,
@@ -217,13 +215,15 @@ class _TableOrderCardState extends State<TableOrderCard> {
                         ),
                       ),
                     );
-                    for (var s in item.sub) {
+                    // Sub Menu Slots
+                    for (var subItem in item.subItems) {
                       slots.add(
                         SizedBox(
                           width: 180,
                           child: CompactMenuSlot(
-                            item: provider.resolveSubItem(s, item.status),
-                            onToggleStatus: () {},
+                            item: subItem,
+                            onToggleStatus: () =>
+                                widget.onToggleStatus(widget.order, subItem),
                             onShowRecipe: widget.onShowRecipe,
                             isSub: true,
                           ),

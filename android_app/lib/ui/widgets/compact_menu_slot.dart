@@ -59,44 +59,34 @@ class CompactMenuSlot extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(
-                  displayName,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: isSub ? 11 : 14,
-                    color: isSub ? Colors.blue : const Color(0xFF0F172A),
-                    height: 1.1,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              GestureDetector(
-                onTap: () => onShowRecipe(item.main),
-                child: Container(
-                  width: 20,
-                  height: 20,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF8FAFC),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Center(
+          GestureDetector(
+            onTap: () => onShowRecipe(item.main),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              color: Colors.transparent, // Expand tap area
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
                     child: Text(
-                      'i',
+                      displayName,
+                      textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 10,
                         fontWeight: FontWeight.w900,
-                        color: Color(0xFFCBD5E1),
+                        fontSize: isSub ? 11 : 14,
+                        color: isSub ? Colors.blue : const Color(0xFF0F172A),
+                        height: 1.1,
+                        decoration: TextDecoration.underline,
+                        decorationStyle: TextDecorationStyle.dotted,
+                        decorationColor: isSub
+                            ? Colors.blue.withOpacity(0.3)
+                            : const Color(0xFFCBD5E1),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
           const SizedBox(height: 4),
           Text(

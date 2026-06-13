@@ -12,121 +12,37 @@ class MenuCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0xFFF1F5F9)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Top: Image PlaceHolder (Scalable)
-          Expanded(
-            flex: 12,
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(28),
-              ),
-              child: Container(
-                color: const Color(0xFFF1F5F9),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    menu.imageUrl.isNotEmpty
-                        ? CachedNetworkImage(
-                            imageUrl: menu.imageUrl,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => const Center(
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : const Center(
-                            child: Text(
-                              "MENU IMAGE",
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                color: Color(0xFFCBD5E1),
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                          ),
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.black.withOpacity(0.15),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    return GestureDetector(
+      onTap: () => _showRecipe(context),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF1F5F9)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.02),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+        child: Center(
+          child: Text(
+            menu.name,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF0F172A),
+              height: 1.2,
+              letterSpacing: -0.4,
             ),
           ),
-          // Bottom: Info & Button
-          Expanded(
-            flex: 11,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    menu.name,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900, // font-black (Weight 900)
-                      color: Color(0xFF0F172A), // slate-900
-                      height: 1.1,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 32,
-                    child: ElevatedButton(
-                      onPressed: () => _showRecipe(context),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0F172A),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: EdgeInsets.zero,
-                      ),
-                      child: const Text(
-                        "조리법 보기",
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
